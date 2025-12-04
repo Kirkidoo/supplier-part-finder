@@ -5,6 +5,7 @@ const BASE_URL = 'https://api.importationsthibault.com/api/v1';
 
 const getClient = () => {
     const token = process.env.THIBAULT_API_KEY;
+    console.log('THIBAULT TOKEN:', token ? `${token.substring(0, 10)}...` : 'NOT SET');
     if (!token) {
         // throw new Error('THIBAULT_API_KEY is not set');
         console.warn('THIBAULT_API_KEY is not set');
@@ -25,11 +26,18 @@ export async function searchThibaultPart(sku: string): Promise<ProductDetails | 
     if (!client) return null;
 
     try {
+        console.log('Searching Thibault for SKU:', sku);
+
         // 1. Get Part Info
+        console.log('Calling /part_info...');
         const infoRes = await client.get(`/part_info`, { params: { sku, language: 'en' } });
+        console.log('Part Info Response:', JSON.stringify(infoRes.data, null, 2));
         const infoItem = infoRes.data.items?.[0];
 
-        if (!infoItem) return null;
+        if (!infoItem) {
+            console.log('No items found in part_info response');
+            return null;
+        }
 
         // 2. Get Stock
         const stockRes = await client.get(`/stock`, { params: { sku, language: 'en' } });
@@ -60,8 +68,18 @@ export async function searchThibaultPart(sku: string): Promise<ProductDetails | 
             } : undefined,
             upc: infoItem.upc,
         };
-    } catch (error) {
-        console.error('Error fetching Thibault data:', error);
+    } catch (error: unknown) {
+        if (axios.isAxiosError(error)) {
+            console.error('Thibault API Error:', {
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                data: error.response?.data,
+                url: error.config?.url,
+                params: error.config?.params,
+            });
+        } else {
+            console.error('Error fetching Thibault data:', error);
+        }
         return null;
     }
 }
