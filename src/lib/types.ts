@@ -7,12 +7,20 @@ export interface ProductDetails {
         dealer?: number;
         net?: number;
         currency?: string;
+        additionalDiscount?: number;
+        dealerDiscount?: number;
     };
     stock: {
         quantity: number;
         status: string; // e.g., 'In Stock', 'Backorder', 'Discontinued'
         warehouse?: string;
     }[];
+    productStatus?: {
+        discontinued?: boolean;
+        specialOrder?: boolean;
+        seasonal?: boolean;
+        oversized?: boolean;
+    };
     weight?: {
         value: number;
         unit: string;

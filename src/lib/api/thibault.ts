@@ -28,58 +28,74 @@ export async function searchThibaultPart(sku: string): Promise<ProductDetails | 
     try {
         console.log('Searching Thibault for SKU:', sku);
 
-        // 1. Get Part Info
-        console.log('Calling /part_info...');
-        const infoRes = await client.get(`/part_info`, { params: { sku, language: 'en' } });
-        console.log('Part Info Response:', JSON.stringify(infoRes.data, null, 2));
-        const infoItem = Array.isArray(infoRes.data.items) ? infoRes.data.items[0] : infoRes.data.items;
+        const [infoResult, stockResult, priceResult] = await Promise.allSettled([
+            client.get(`/part_info`, { params: { sku, language: 'en' } }),
+            client.get(`/stock`, { params: { sku, language: 'en' } }),
+            client.get(`/pricing`, { params: { sku, language: 'en' } })
+        ]);
 
-        if (!infoItem) {
-            console.log('No items found in part_info response');
+        // Helper to extract data or log error
+        const getData = (result: PromiseSettledResult<any>, name: string) => {
+            if (result.status === 'fulfilled') {
+                const items = result.value.data.items;
+                return Array.isArray(items) ? items[0] : items;
+            } else {
+                console.error(`Error fetching ${name}:`, result.reason?.message || result.reason);
+                return null;
+            }
+        };
+
+        const infoItem = getData(infoResult, 'part_info');
+        const stockItem = getData(stockResult, 'stock');
+        const priceItem = getData(priceResult, 'pricing');
+
+
+
+
+        if (!infoItem && !stockItem && !priceItem) {
+            console.log('No data found from any endpoint');
             return null;
         }
 
-        // 2. Get Stock
-        const stockRes = await client.get(`/stock`, { params: { sku, language: 'en' } });
-        const stockItem = Array.isArray(stockRes.data.items) ? stockRes.data.items[0] : stockRes.data.items;
+        // Fallback values if infoItem is missing but others exist
+        const description = infoItem?.description || `Product ${sku}`;
+        const weightValue = infoItem?.weight?.value || 0;
+        const weightUnit = infoItem?.weight?.unit?.code || 'lb';
+        const upc = infoItem?.upc || '';
 
-        // 3. Get Pricing
-        const priceRes = await client.get(`/pricing`, { params: { sku, language: 'en' } });
-        const priceItem = Array.isArray(priceRes.data.items) ? priceRes.data.items[0] : priceRes.data.items;
-
-        return {
+        const productDetails: ProductDetails = {
             supplier: 'Thibault',
-            sku: infoItem.sku,
-            description: infoItem.description,
+            sku: sku, // Use requested SKU if infoItem is missing
+            description: description,
             price: {
                 retail: priceItem?.retail || 0,
-                dealer: priceItem?.discount?.dealer, // Using dealer discount percentage or value? Docs say "dealer": 30. "net": 52.49.
-                net: priceItem?.discount?.net,
-                currency: 'CAD', // Assuming CAD
+                dealer: priceItem?.discount?.dealer || 0,
+                net: priceItem?.net || priceItem?.discount?.net || 0,
+                additionalDiscount: priceItem?.discount?.additional || 0,
+                dealerDiscount: priceItem?.discount?.dealer || 0,
+                currency: 'CAD',
             },
             stock: [{
                 quantity: stockItem?.quantity?.value || 0,
                 status: stockItem?.status?.back_order ? 'Backorder' : 'In Stock',
                 warehouse: 'Main',
             }],
-            weight: infoItem.weight ? {
-                value: infoItem.weight.value,
-                unit: infoItem.weight.unit.code,
-            } : undefined,
-            upc: infoItem.upc,
+            productStatus: {
+                discontinued: infoItem?.status?.discontinued || stockItem?.status?.discontinued || false,
+                specialOrder: infoItem?.status?.special_order || stockItem?.status?.special_order || false,
+                seasonal: infoItem?.status?.seasonal || stockItem?.status?.seasonal || false,
+                oversized: infoItem?.status?.oversized || stockItem?.status?.oversized || false,
+            },
+            weight: {
+                value: weightValue,
+                unit: weightUnit,
+            },
+            upc: upc,
         };
+
+        return productDetails;
     } catch (error: unknown) {
-        if (axios.isAxiosError(error)) {
-            console.error('Thibault API Error:', {
-                status: error.response?.status,
-                statusText: error.response?.statusText,
-                data: error.response?.data,
-                url: error.config?.url,
-                params: error.config?.params,
-            });
-        } else {
-            console.error('Error fetching Thibault data:', error);
-        }
+        console.error('Unexpected error in searchThibaultPart:', error);
         return null;
     }
 }
