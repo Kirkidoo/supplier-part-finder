@@ -105,21 +105,26 @@ export default function Home() {
                             </div>
 
                             {/* Search Bar */}
-                            <form onSubmit={handleSearch} className="flex-1 flex relative">
+                            <form onSubmit={handleSearch} className="flex-1 flex relative items-start">
                                 <div className="relative flex-1">
-                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
-                                    <input
-                                        type="text"
+                                    <Search className="absolute left-4 top-4 text-gray-400 w-5 h-5" />
+                                    <textarea
                                         value={partNumber}
                                         onChange={(e) => setPartNumber(e.target.value)}
-                                        placeholder="Enter SKU(s) - comma or space separated"
-                                        className="w-full pl-12 pr-4 py-3.5 text-base text-gray-900 placeholder:text-gray-400 bg-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20 transition-all border border-transparent focus:border-blue-500"
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                                e.preventDefault();
+                                                handleSearch(e);
+                                            }
+                                        }}
+                                        placeholder="Enter SKU(s) - one per line or comma separated"
+                                        className="w-full pl-12 pr-4 py-3.5 text-base text-gray-900 placeholder:text-gray-400 bg-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20 transition-all border border-transparent focus:border-blue-500 min-h-[100px] resize-y"
                                     />
                                 </div>
                                 <button
                                     type="submit"
                                     disabled={loading}
-                                    className="ml-2 bg-blue-600 text-white px-8 py-2 rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20 disabled:opacity-50 disabled:shadow-none font-medium flex items-center justify-center min-w-[100px]"
+                                    className="ml-2 bg-blue-600 text-white px-8 py-2 rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20 disabled:opacity-50 disabled:shadow-none font-medium flex items-center justify-center min-w-[100px] h-[52px]"
                                 >
                                     {loading ? <Loader2 className="animate-spin w-5 h-5" /> : 'Search'}
                                 </button>
