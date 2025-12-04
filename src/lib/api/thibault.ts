@@ -32,7 +32,7 @@ export async function searchThibaultPart(sku: string): Promise<ProductDetails | 
         console.log('Calling /part_info...');
         const infoRes = await client.get(`/part_info`, { params: { sku, language: 'en' } });
         console.log('Part Info Response:', JSON.stringify(infoRes.data, null, 2));
-        const infoItem = infoRes.data.items?.[0];
+        const infoItem = Array.isArray(infoRes.data.items) ? infoRes.data.items[0] : infoRes.data.items;
 
         if (!infoItem) {
             console.log('No items found in part_info response');
@@ -41,11 +41,11 @@ export async function searchThibaultPart(sku: string): Promise<ProductDetails | 
 
         // 2. Get Stock
         const stockRes = await client.get(`/stock`, { params: { sku, language: 'en' } });
-        const stockItem = stockRes.data.items?.[0];
+        const stockItem = Array.isArray(stockRes.data.items) ? stockRes.data.items[0] : stockRes.data.items;
 
         // 3. Get Pricing
         const priceRes = await client.get(`/pricing`, { params: { sku, language: 'en' } });
-        const priceItem = priceRes.data.items?.[0];
+        const priceItem = Array.isArray(priceRes.data.items) ? priceRes.data.items[0] : priceRes.data.items;
 
         return {
             supplier: 'Thibault',
