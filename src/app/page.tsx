@@ -74,7 +74,7 @@ export default function Home() {
                             value={partNumber}
                             onChange={(e) => setPartNumber(e.target.value)}
                             placeholder="Enter Part Number (e.g. 123456)"
-                            className="w-full px-6 py-4 text-lg rounded-full border-2 border-gray-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all shadow-sm"
+                            className="w-full px-6 py-4 text-lg rounded-full border-2 border-gray-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all shadow-sm placeholder:text-gray-500"
                         />
                         <button
                             type="submit"
