@@ -11,7 +11,7 @@ type Supplier = 'motovan' | 'thibault' | 'both';
 
 export default function Home() {
     const [partNumber, setPartNumber] = useState('');
-    const [supplier, setSupplier] = useState<Supplier>('both');
+    const [supplier, setSupplier] = useState<Supplier>('thibault');
     const [loading, setLoading] = useState(false);
     const [results, setResults] = useState<{ thibault: ProductDetails | null; motovan: ProductDetails | null } | null>(null);
     const [error, setError] = useState('');
@@ -118,8 +118,18 @@ export default function Home() {
                                             }
                                         }}
                                         placeholder="Enter SKU(s) - one per line or comma separated"
-                                        className="w-full pl-12 pr-4 py-3.5 text-base text-gray-900 placeholder:text-gray-400 bg-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20 transition-all border border-transparent focus:border-blue-500 min-h-[100px] resize-y"
+                                        className="w-full pl-12 pr-10 py-3.5 text-base text-gray-900 placeholder:text-gray-400 bg-white rounded-xl outline-none focus:ring-2 focus:ring-blue-500/20 transition-all border border-transparent focus:border-blue-500 min-h-[100px] resize-y"
                                     />
+                                    {partNumber && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setPartNumber('')}
+                                            className="absolute right-4 top-4 p-1 text-gray-400 hover:text-gray-600 bg-white/50 hover:bg-white rounded-md transition-all"
+                                            title="Clear search"
+                                        >
+                                            <X size={16} />
+                                        </button>
+                                    )}
                                 </div>
                                 <button
                                     type="submit"

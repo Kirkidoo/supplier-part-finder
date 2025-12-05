@@ -1,12 +1,13 @@
 import { useState, useCallback, useEffect } from 'react';
 import { ProductDetails } from '@/lib/types';
 import axios from 'axios';
-import { X, Package, Tag, DollarSign, Layers, FileText, Box, MapPin, Upload, CheckCircle, AlertCircle, Settings, Image as ImageIcon } from 'lucide-react';
+import { X, Package, Tag, DollarSign, Layers, FileText, Box, MapPin, Upload, CheckCircle, AlertCircle, Settings, Image as ImageIcon, Plus } from 'lucide-react';
 import { VariantParser } from '@/lib/variant-parser';
 
 interface VariantData {
     sku: string;
     optionValue: string;
+    option2Value: string;
     price: number;
     compareAtPrice: number;
     cost: number;
@@ -28,8 +29,10 @@ interface CreateProductModalProps {
 export default function CreateProductModal({ isOpen, onClose, product, variants }: CreateProductModalProps) {
     const [loading, setLoading] = useState(false);
     const [dragActive, setDragActive] = useState(false);
+    const [imageUrl, setImageUrl] = useState('');
+    const [forceMultiVariant, setForceMultiVariant] = useState(false);
 
-    const isMultiVariant = variants && variants.length > 1;
+    const isMultiVariant = (variants && variants.length > 1) || forceMultiVariant;
     const allProducts = variants || [product];
 
     // Product-level form data
@@ -42,9 +45,37 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
         tags: '',
         templateSuffix: '',
         optionName: 'Size',
+        option2Name: '',
         locationId: '105008496957',
         status: 'active' as 'active' | 'draft',
     });
+
+    // Sticky settings
+    const [rememberSettings, setRememberSettings] = useState(false);
+
+    // Load settings from localStorage
+    useEffect(() => {
+        const savedSettings = localStorage.getItem('shopify_product_org_settings');
+        if (savedSettings) {
+            try {
+                const parsed = JSON.parse(savedSettings);
+                setRememberSettings(parsed.remember);
+                if (parsed.remember) {
+                    setFormData(prev => ({
+                        ...prev,
+                        type: parsed.type || prev.type,
+                        vendor: parsed.vendor || prev.vendor,
+                        tags: parsed.tags || prev.tags,
+                        templateSuffix: parsed.templateSuffix || prev.templateSuffix,
+                        locationId: parsed.locationId || prev.locationId,
+                        status: parsed.status || prev.status,
+                    }));
+                }
+            } catch (e) {
+                console.error('Failed to parse saved settings', e);
+            }
+        }
+    }, []);
 
     // Variant-level form data
     const [variantsData, setVariantsData] = useState<VariantData[]>([]);
@@ -66,17 +97,18 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
             return {
                 sku: p.sku,
                 optionValue: parsed ? parsed.optionValue : p.sku,
+                option2Value: '',
                 price: p.price.retail,
                 compareAtPrice: p.price.retail,
                 cost: p.price.net || 0,
-                margin: p.price.retail && p.price.net
+                margin: (p.price.retail && p.price.net)
                     ? parseFloat((((p.price.retail - p.price.net) / p.price.retail) * 100).toFixed(2))
                     : 0,
-                upc: p.upc || '',
                 weight: p.weight?.value || 0,
                 weightUnit: p.weight?.unit || 'lb',
                 stock: p.stock.reduce((sum, s) => sum + s.quantity, 0),
                 image: p.image || '', // Initialize with product image
+                upc: Array.isArray(p.upc) ? p.upc[0] : (p.upc || ''),
             };
         });
         setVariantsData(initialVariants);
@@ -98,8 +130,7 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
             return {
                 ...variant,
                 margin: newMargin,
-                price: newPrice,
-                compareAtPrice: newPrice
+                price: newPrice
             };
         }));
     };
@@ -165,7 +196,10 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
     const handleFile = (file: File) => {
         const reader = new FileReader();
         reader.onloadend = () => {
-            handleChange('image', reader.result);
+            setFormData(prev => ({
+                ...prev,
+                images: [...prev.images, reader.result as string]
+            }));
         };
         reader.readAsDataURL(file);
     };
@@ -204,6 +238,25 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                     isMultiVariant,
                 },
             });
+
+            // Save settings if remember is checked
+            if (rememberSettings) {
+                const settingsToSave = {
+                    remember: true,
+                    type: formData.type,
+                    vendor: formData.vendor,
+                    tags: formData.tags,
+                    templateSuffix: formData.templateSuffix,
+                    locationId: formData.locationId,
+                    status: formData.status,
+                };
+                localStorage.setItem('shopify_product_org_settings', JSON.stringify(settingsToSave));
+            } else {
+                // Determine if we should clear or just save the 'remember: false' state
+                // Usually better to just save remember: false so it stays unchecked next time
+                localStorage.setItem('shopify_product_org_settings', JSON.stringify({ remember: false }));
+            }
+
             alert('Product created successfully!');
             onClose();
         } catch (error: any) {
@@ -230,6 +283,16 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                     {variantsData.length} Variants
                                 </span>
                             )}
+                            {!isMultiVariant && (
+                                <button
+                                    type="button"
+                                    onClick={() => setForceMultiVariant(true)}
+                                    className="text-sm font-medium bg-blue-50 text-blue-700 px-3 py-1 rounded-full hover:bg-blue-100 transition-colors flex items-center gap-1"
+                                >
+                                    <Plus size={14} />
+                                    Add as Variant
+                                </button>
+                            )}
                         </h2>
                         <p className="text-sm text-gray-500 mt-1">Review and edit product details before publishing.</p>
                     </div>
@@ -255,16 +318,50 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                     </h3>
                                 </div>
 
-                                <div className="mb-4">
-                                    <label className="label-premium">Option Name</label>
-                                    <input
-                                        type="text"
-                                        value={formData.optionName}
-                                        onChange={(e) => handleChange('optionName', e.target.value)}
-                                        className="input-premium max-w-xs"
-                                        placeholder="e.g. Size, Color, Model"
-                                    />
-                                    <p className="text-xs text-gray-400 mt-1">This groups your variants (e.g., "Size" with values "Small", "Large")</p>
+                                <div className="mb-4 flex gap-4">
+                                    <div>
+                                        <label className="label-premium">Option Name</label>
+                                        <input
+                                            type="text"
+                                            value={formData.optionName}
+                                            onChange={(e) => handleChange('optionName', e.target.value)}
+                                            className="input-premium max-w-xs"
+                                            placeholder="e.g. Size"
+                                        />
+                                    </div>
+                                    {formData.option2Name !== undefined && (
+                                        <div>
+                                            <label className="label-premium">Option 2 Name</label>
+                                            <div className="flex gap-2">
+                                                <input
+                                                    type="text"
+                                                    value={formData.option2Name}
+                                                    onChange={(e) => handleChange('option2Name', e.target.value)}
+                                                    className="input-premium max-w-xs"
+                                                    placeholder="e.g. Color"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleChange('option2Name', '')}
+                                                    className="text-red-500 hover:bg-red-50 p-2 rounded"
+                                                    title="Remove Option 2"
+                                                >
+                                                    <X size={16} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {!formData.option2Name && (
+                                        <div className="flex items-end pb-1">
+                                            <button
+                                                type="button"
+                                                onClick={() => handleChange('option2Name', 'Color')}
+                                                className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                                            >
+                                                <Plus size={14} /> Add Option 2
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="overflow-x-auto">
@@ -273,7 +370,9 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                             <tr className="text-left text-gray-500 border-b border-purple-200">
                                                 <th className="pb-2 pr-4 font-medium">Image</th>
                                                 <th className="pb-2 pr-4 font-medium">{formData.optionName || 'Option'}</th>
+                                                {formData.option2Name && <th className="pb-2 pr-4 font-medium">{formData.option2Name}</th>}
                                                 <th className="pb-2 pr-4 font-medium">SKU</th>
+                                                <th className="pb-2 pr-4 font-medium">Barcode</th>
                                                 <th className="pb-2 pr-4 font-medium">Cost</th>
                                                 <th className="pb-2 pr-4 font-medium">
                                                     <div className="flex flex-col gap-1">
@@ -329,6 +428,16 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                                             className="input-premium text-sm py-1.5"
                                                         />
                                                     </td>
+                                                    {formData.option2Name && (
+                                                        <td className="py-2 pr-2">
+                                                            <input
+                                                                type="text"
+                                                                value={variant.option2Value || ''}
+                                                                onChange={(e) => handleVariantChange(idx, 'option2Value', e.target.value)}
+                                                                className="input-premium text-sm py-1.5"
+                                                            />
+                                                        </td>
+                                                    )}
                                                     <td className="py-2 pr-2">
                                                         <input
                                                             type="text"
@@ -338,14 +447,21 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                                         />
                                                     </td>
                                                     <td className="py-2 pr-2">
+                                                        <input
+                                                            type="text"
+                                                            value={variant.upc}
+                                                            onChange={(e) => handleVariantChange(idx, 'upc', e.target.value)}
+                                                            className="input-premium text-sm py-1.5 font-mono"
+                                                        />
+                                                    </td>
+                                                    <td className="py-2 pr-2">
                                                         <div className="relative">
-                                                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">$</span>
                                                             <input
                                                                 type="number"
                                                                 step="0.01"
                                                                 value={variant.cost}
                                                                 readOnly
-                                                                className="input-premium text-sm py-1.5 pl-5 w-24 bg-gray-50"
+                                                                className="input-premium text-sm py-1.5 w-24 bg-gray-50"
                                                             />
                                                         </div>
                                                     </td>
@@ -360,13 +476,12 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                                     </td>
                                                     <td className="py-2 pr-2">
                                                         <div className="relative">
-                                                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">$</span>
                                                             <input
                                                                 type="number"
                                                                 step="0.01"
                                                                 value={variant.price || ''}
                                                                 onChange={(e) => handleVariantChange(idx, 'price', parseFloat(e.target.value) || 0)}
-                                                                className="input-premium text-sm py-1.5 pl-5 w-24"
+                                                                className="input-premium text-sm py-1.5 w-24"
                                                             />
                                                         </div>
                                                     </td>
@@ -513,16 +628,17 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                                     type="text"
                                                     placeholder="Paste image URL here..."
                                                     className="input-premium text-sm flex-1"
+                                                    value={imageUrl}
+                                                    onChange={(e) => setImageUrl(e.target.value)}
                                                     onKeyDown={(e) => {
                                                         if (e.key === 'Enter') {
                                                             e.preventDefault();
-                                                            const url = e.currentTarget.value;
-                                                            if (url) {
+                                                            if (imageUrl.trim()) {
                                                                 setFormData(prev => ({
                                                                     ...prev,
-                                                                    images: [...prev.images, url]
+                                                                    images: [...prev.images, imageUrl.trim()]
                                                                 }));
-                                                                e.currentTarget.value = '';
+                                                                setImageUrl('');
                                                             }
                                                         }
                                                     }}
@@ -530,14 +646,13 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                                 <button
                                                     type="button"
                                                     className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg font-medium hover:bg-gray-200 transition-colors"
-                                                    onClick={(e: any) => {
-                                                        const input = e.currentTarget.previousElementSibling as HTMLInputElement;
-                                                        if (input.value) {
+                                                    onClick={() => {
+                                                        if (imageUrl.trim()) {
                                                             setFormData(prev => ({
                                                                 ...prev,
-                                                                images: [...prev.images, input.value]
+                                                                images: [...prev.images, imageUrl.trim()]
                                                             }));
-                                                            input.value = '';
+                                                            setImageUrl('');
                                                         }
                                                     }}
                                                 >
@@ -560,12 +675,11 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                             <div>
                                                 <label className="label-premium">Cost per Item (Net)</label>
                                                 <div className="relative">
-                                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
                                                     <input
                                                         type="number"
                                                         step="0.01"
                                                         value={variantsData[0].cost}
-                                                        className="input-premium pl-7 bg-gray-50 text-gray-500"
+                                                        className="input-premium bg-gray-50 text-gray-500"
                                                         readOnly
                                                     />
                                                 </div>
@@ -585,13 +699,12 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                             <div>
                                                 <label className="label-premium">Price</label>
                                                 <div className="relative">
-                                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
                                                     <input
                                                         type="number"
                                                         step="0.01"
                                                         value={variantsData[0].price || ''}
                                                         onChange={(e) => handleVariantChange(0, 'price', parseFloat(e.target.value) || 0)}
-                                                        className="input-premium pl-7"
+                                                        className="input-premium"
                                                         required
                                                     />
                                                 </div>
@@ -599,13 +712,12 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                             <div>
                                                 <label className="label-premium">Compare at Price</label>
                                                 <div className="relative">
-                                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
                                                     <input
                                                         type="number"
                                                         step="0.01"
                                                         value={variantsData[0].compareAtPrice || ''}
                                                         onChange={(e) => handleVariantChange(0, 'compareAtPrice', parseFloat(e.target.value) || 0)}
-                                                        className="input-premium pl-7"
+                                                        className="input-premium"
                                                     />
                                                 </div>
                                             </div>
@@ -617,9 +729,20 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                             {/* Right Column: Organization & Inventory */}
                             <div className="space-y-6">
                                 <section className="bg-gray-50/50 rounded-xl border border-gray-100 p-6">
-                                    <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                                        <Layers size={18} className="text-gray-400" />
-                                        Organization
+                                    <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2 justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <Layers size={18} className="text-gray-400" />
+                                            Organization
+                                        </div>
+                                        <label className="flex items-center gap-2 text-xs font-normal text-gray-500 cursor-pointer select-none hover:text-blue-600 transition-colors">
+                                            <input
+                                                type="checkbox"
+                                                checked={rememberSettings}
+                                                onChange={(e) => setRememberSettings(e.target.checked)}
+                                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 w-3 h-3"
+                                            />
+                                            Remember settings
+                                        </label>
                                     </h3>
                                     <div className="space-y-4">
                                         <div>

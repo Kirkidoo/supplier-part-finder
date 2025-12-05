@@ -226,6 +226,7 @@ async function setCostPerItem(inventoryItemId: string, cost: number) {
 interface VariantData {
     sku: string;
     optionValue: string;
+    option2Value?: string; // New field
     price: number;
     compareAtPrice: number;
     cost: number;
@@ -242,7 +243,7 @@ export async function createShopifyProduct(details: ProductDetails | ProductDeta
 
     const productsArray = Array.isArray(details) ? details : [details];
     const firstProduct = productsArray[0];
-    const isMultiVariant = customData?.isMultiVariant && customData?.variants?.length > 1;
+    const isMultiVariant = customData?.isMultiVariant || (customData?.variants && customData.variants.length > 1);
     const primaryImage = customData?.image || firstProduct.image || '';
 
     // Convert plain text description to HTML
@@ -258,17 +259,30 @@ export async function createShopifyProduct(details: ProductDetails | ProductDeta
         const optionName = customData.optionName || 'Variant';
         options = [{ name: optionName }];
 
-        variants = customData.variants.map((v: VariantData) => ({
-            option1: v.optionValue,
-            price: v.price,
-            compare_at_price: v.compareAtPrice || null,
-            sku: v.sku,
-            inventory_management: 'shopify',
-            inventory_policy: 'deny',
-            barcode: v.upc || '',
-            weight: v.weight || 0,
-            weight_unit: (v.weightUnit || 'lb').toLowerCase(),
-        }));
+        // Add Option 2 if present
+        if (customData.option2Name) {
+            options.push({ name: customData.option2Name });
+        }
+
+        variants = customData.variants.map((v: VariantData) => {
+            const variantPayload: any = {
+                option1: v.optionValue,
+                price: v.price,
+                compare_at_price: v.compareAtPrice || null,
+                sku: v.sku,
+                inventory_management: 'shopify',
+                inventory_policy: 'deny',
+                barcode: v.upc || '',
+                weight: v.weight || 0,
+                weight_unit: (v.weightUnit || 'lb').toLowerCase(),
+            };
+
+            if (customData.option2Name) {
+                variantPayload.option2 = v.option2Value || 'Default';
+            }
+
+            return variantPayload;
+        });
     } else {
         const variantData = customData?.variants?.[0];
         variants = [{
@@ -527,5 +541,129 @@ export async function createShopifyProduct(details: ProductDetails | ProductDeta
     } catch (error: any) {
         console.error('Error creating Shopify product:', error?.response?.data || error);
         throw error;
+    }
+}
+
+// Fetch products by location ID
+export async function getProductsByLocation(locationId: string) {
+    if (!locationId) return [];
+
+    // GraphQL query to fetch inventory levels for a specific location
+    // We need to paginate through results. Starting with first 50.
+    // Note: InventoryLevels connection is not directly on root in recent API versions without filters often,
+    // but better to go through Location -> InventoryLevels if possible or use root inventoryLevels with location_id query.
+    // Let's try root inventoryLevels query which is standard.
+
+    // Update: inventoryLevels query argument 'locationId' is deprecated or specific.
+    // Best practice: Query Location(id: locationId) { inventoryLevels(...) }
+
+    const query = `
+        query($cursor: String) {
+            location(id: "gid://shopify/Location/${locationId}") {
+                id
+                name
+                inventoryLevels(first: 50, after: $cursor) {
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                    edges {
+                        node {
+                            id
+                            quantities(names: ["available"]) {
+                                quantity
+                            }
+                            item {
+                                id
+                                sku
+                                unitCost {
+                                    amount
+                                }
+                                variant {
+                                    id
+                                    title
+                                    price
+                                    barcode
+                                    product {
+                                        id
+                                        title
+                                        vendor
+                                        status
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    `;
+
+    try {
+        let allItems: any[] = [];
+        let hasNextPage = true;
+        let cursor: string | null = null;
+
+        console.log(`Fetching products for location ${locationId}...`);
+
+        while (hasNextPage) {
+            const response: any = await graphqlRequest(query, { cursor });
+            const locationData = response?.data?.location;
+
+            if (!locationData) {
+                console.error('Location not found in response:', JSON.stringify(response));
+                break;
+            }
+
+            if (!locationData.inventoryLevels) {
+                console.warn('Location found but no inventoryLevels:', JSON.stringify(locationData));
+                hasNextPage = false;
+                break;
+            }
+
+            const { edges, pageInfo } = locationData.inventoryLevels;
+            console.log(`Found ${edges.length} inventory edges.`);
+
+            const items = edges.map((edge: any) => {
+                const node = edge.node;
+                const item = node.item;
+                const variant = item?.variant;
+                const product = variant?.product;
+
+                if (!item || !variant || !product) {
+                    console.warn('Incomplete item/variant/product data for node:', node.id);
+                    return null;
+                }
+
+                const available = node.quantities?.[0]?.quantity || 0;
+
+                return {
+                    inventoryLevelId: node.id,
+                    inventoryItemId: item.id,
+                    sku: item.sku,
+                    cost: item.unitCost?.amount,
+                    available: available,
+                    variantId: variant.id,
+                    variantTitle: variant.title,
+                    price: variant.price,
+                    barcode: variant.barcode,
+                    productId: product.id,
+                    productTitle: product.title,
+                    vendor: product.vendor,
+                    status: product.status
+                };
+            }).filter((i: any) => i !== null);
+
+            console.log(`Mapped ${items.length} valid items.`);
+            allItems = [...allItems, ...items];
+            hasNextPage = pageInfo.hasNextPage;
+            cursor = pageInfo.endCursor;
+        }
+
+        console.log(`Total items fetched: ${allItems.length}`);
+        return allItems;
+    } catch (error) {
+        console.error('Error fetching products by location:', error);
+        return [];
     }
 }

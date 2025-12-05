@@ -62,6 +62,62 @@ export class VariantParser {
             }
         }
 
+        // Strategy 2: Look for explicit "Size" or "Color" labels
+        // Example: "Jacket Size L", "T-Shirt Color Red", "Boots Sz 10"
+        const sizeRegex = /\b(?:Size|Sz|SIZE|Sz\.)\s*[:.-]?\s*([a-zA-Z0-9/.-]+)$/i;
+        const sizeMatch = description.match(sizeRegex);
+        if (sizeMatch) {
+            optionValue = sizeMatch[1];
+            baseName = description.replace(sizeRegex, '').trim();
+            optionName = 'Size';
+            return { baseName, optionValue, optionName };
+        }
+
+        const colorRegex = /\b(?:Color|Col|Colour)\s*[:.-]?\s*([a-zA-Z]+)$/i;
+        const colorMatch = description.match(colorRegex);
+        if (colorMatch) {
+            optionValue = colorMatch[1];
+            baseName = description.replace(colorRegex, '').trim();
+            optionName = 'Color';
+            return { baseName, optionValue, optionName };
+        }
+
+        // Strategy 3: Check for known colors at the end
+        // Example: "Helmet Red"
+        const knownColors = ['black', 'white', 'red', 'blue', 'green', 'yellow', 'orange', 'purple', 'grey', 'gray', 'silver', 'gold', 'chrome', 'beige', 'tan', 'brown', 'pink', 'matte black'];
+        // Sort by length desc to match "matte black" before "black"
+        knownColors.sort((a, b) => b.length - a.length);
+
+        for (const color of knownColors) {
+            if (description.toLowerCase().endsWith(color)) {
+                // Check boundary (ensure it's a whole word)
+                const regex = new RegExp(`\\b${color}$`, 'i');
+                if (regex.test(description)) {
+                    optionValue = description.slice(description.length - color.length); // Preserve case
+                    // Construct base name carefully
+                    baseName = description.substring(0, description.length - color.length).trim();
+                    // Remove trailing separator if present
+                    baseName = baseName.replace(/[-:]$/, '').trim();
+                    optionName = 'Color';
+                    return { baseName, optionValue, optionName };
+                }
+            }
+        }
+
+        // Strategy 4: Look for trailing standalone size codes
+        // Example: "Jacket Black S", "Shirt XL"
+        // Matches common sizes like S, M, L, XL, XS, XXL... at the end of the string
+        // Also supports "One Size" variants
+        const safeTrailingSizeRegex = /\s+\b(S|M|L|XS|XL|XXL|2XL|3XL|4XL|XXS|2XS|One\sSize|OS)\b$/i;
+
+        const trailingSizeMatch = description.match(safeTrailingSizeRegex);
+        if (trailingSizeMatch) {
+            optionValue = trailingSizeMatch[1];
+            baseName = description.replace(safeTrailingSizeRegex, '').trim();
+            optionName = 'Size';
+            return { baseName, optionValue, optionName };
+        }
+
         return { baseName, optionValue, optionName };
     }
 
