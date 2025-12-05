@@ -1,5 +1,5 @@
 export interface ProductDetails {
-    supplier: 'Thibault' | 'Motovan';
+    supplier: 'Thibault' | 'Motovan' | 'ITL';
     sku: string;
     description: string;
     price: {
@@ -28,4 +28,14 @@ export interface ProductDetails {
     brand?: string;
     upc?: string;
     image?: string;
+    // For grouped products
+    isGrouped?: boolean;
+    optionName?: string;
+    variants?: {
+        sku: string;
+        optionValue: string;
+        price?: number;
+        stock?: number;
+        // extended fields as needed
+    }[];
 }

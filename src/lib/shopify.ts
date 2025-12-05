@@ -115,6 +115,97 @@ async function publishToSalesChannels(productId: string) {
     }
 }
 
+// Check if products exist by SKU
+export async function findProductsBySku(skus: string[]) {
+    if (!skus || skus.length === 0) return [];
+
+    const queries = skus.map(sku => `sku:${sku}`).join(' OR ');
+    const query = `
+        query {
+            products(first: 10, query: "${queries}") {
+                edges {
+                    node {
+                        id
+                        title
+                        handle
+                        totalVariants
+                        variants(first: 10) {
+                            edges {
+                                node {
+                                    sku
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    `;
+
+    try {
+        const response = await graphqlRequest(query);
+        return response?.data?.products?.edges?.map((edge: any) => edge.node) || [];
+    } catch (error) {
+        console.error('Error searching products by SKU:', error);
+        return [];
+    }
+}
+
+// Check if product exists by Title
+export async function findProductByTitle(title: string) {
+    if (!title) return null;
+
+    // Escape quotes in title for GraphQL
+    const escapedTitle = title.replace(/"/g, '\\"');
+    const query = `
+        query {
+            products(first: 1, query: "title:\\"${escapedTitle}\\"") {
+                edges {
+                    node {
+                        id
+                        title
+                        handle
+                        totalVariants
+                        variants(first: 50) {
+                            edges {
+                                node {
+                                    id
+                                    sku
+                                    inventoryItem {
+                                        id
+                                    }
+                                }
+                            }
+                        }
+                        images(first: 50) {
+                            edges {
+                                node {
+                                    id
+                                    url
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    `;
+
+    try {
+        const response = await graphqlRequest(query);
+        const edges = response?.data?.products?.edges;
+        if (edges && edges.length > 0) {
+            // Check for exact title match because search can be fuzzy
+            const exactMatch = edges.find((edge: any) => edge.node.title === title);
+            return exactMatch ? exactMatch.node : null;
+        }
+        return null;
+    } catch (error) {
+        console.error('Error searching products by Title:', error);
+        return null;
+    }
+}
+
 // Set cost per item on inventory item
 async function setCostPerItem(inventoryItemId: string, cost: number) {
     const client = getClient();
@@ -192,18 +283,144 @@ export async function createShopifyProduct(details: ProductDetails | ProductDeta
         }];
     }
 
-    // Build images array - only primary image initially
+    // Build images array
     const images: any[] = [];
-    if (primaryImage) {
-        if (primaryImage.startsWith('data:image')) {
-            images.push({ attachment: primaryImage.split(',')[1] });
+    const sourceImages = customData?.images || (primaryImage ? [primaryImage] : []);
+
+    sourceImages.forEach((img: string) => {
+        if (!img) return;
+        if (img.startsWith('data:image')) {
+            images.push({ attachment: img.split(',')[1] });
         } else {
-            images.push({ src: primaryImage });
+            images.push({ src: img });
         }
+    });
+
+    // Check if product already exists by Title (Description)
+    const productTitle = customData?.title || firstProduct.description;
+    const existingProduct = await findProductByTitle(productTitle);
+
+    if (existingProduct) {
+        console.log(`Found existing product with title "${productTitle}" (${existingProduct.id}). Merging variants...`);
+
+        // Merge logic
+        const existingVariants = existingProduct.variants.edges.map((e: any) => e.node);
+        const createdVariants: any[] = [];
+
+        for (let i = 0; i < variants.length; i++) {
+            const newVariant = variants[i];
+            const existingVariant = existingVariants.find((v: any) => v.sku === newVariant.sku);
+
+            if (existingVariant) {
+                console.log(`Variant with SKU ${newVariant.sku} already exists. Updating...`);
+                // Update existing variant logic could go here (e.g. price, inventory)
+                // For now, we'll just update inventory and cost if needed
+
+                // We need the inventory_item_id to set cost/inventory
+                // The existingVariant from GraphQL has inventoryItem { id }
+                const inventoryItemId = existingVariant.inventoryItem?.id?.split('/').pop();
+
+                if (inventoryItemId) {
+                    const stockData = customData?.variants?.[i]?.stock
+                        || productsArray[i]?.stock?.reduce((sum: number, s: any) => sum + s.quantity, 0)
+                        || 0;
+                    const costData = customData?.variants?.[i]?.cost || productsArray[i]?.price?.net || 0;
+
+                    // Update inventory
+                    if (customData?.locationId) {
+                        try {
+                            await client.post('/inventory_levels/set.json', {
+                                location_id: customData.locationId,
+                                inventory_item_id: inventoryItemId,
+                                available: stockData,
+                            });
+                        } catch (invError: any) {
+                            console.error(`Error updating inventory for ${newVariant.sku}:`, invError?.response?.data || invError);
+                        }
+                    }
+
+                    // Update cost
+                    if (costData > 0) {
+                        await setCostPerItem(inventoryItemId, costData);
+                    }
+                }
+                createdVariants.push(existingVariant);
+
+            } else {
+                console.log(`Creating new variant for SKU ${newVariant.sku}...`);
+                try {
+                    // Create new variant
+                    // Need to strip 'option1' if the product has options, or match the option name
+                    // If existing product has options, we need to match them.
+                    // This is complex if options don't match. Assuming simple case for now.
+
+                    const variantPayload = {
+                        ...newVariant,
+                        // If existing product has 1 option, we use option1.
+                        // We should probably check existingProduct.options but we didn't fetch them in findProductByTitle
+                        // Assuming standard "Variant" or similar single option for now as per create logic
+                    };
+
+                    const response = await client.post(`/products/${existingProduct.id.split('/').pop()}/variants.json`, {
+                        variant: variantPayload
+                    });
+                    const createdVariant = response.data.variant;
+
+                    // Handle Image for new variant
+                    const variantData = customData?.variants?.[i];
+                    if (variantData?.image) {
+                        try {
+                            const imagePayload: any = {
+                                variant_ids: [createdVariant.id],
+                            };
+                            if (variantData.image.startsWith('data:image')) {
+                                imagePayload.attachment = variantData.image.split(',')[1];
+                            } else {
+                                imagePayload.src = variantData.image;
+                            }
+                            await client.post(`/products/${existingProduct.id.split('/').pop()}/images.json`, {
+                                image: imagePayload,
+                            });
+                        } catch (imgError: any) {
+                            console.error(`Error uploading image for variant ${variantData.sku}:`, imgError?.response?.data || imgError);
+                        }
+                    }
+
+                    // Set Inventory/Cost for new variant
+                    const stockData = customData?.variants?.[i]?.stock
+                        || productsArray[i]?.stock?.reduce((sum: number, s: any) => sum + s.quantity, 0)
+                        || 0;
+                    const costData = customData?.variants?.[i]?.cost || productsArray[i]?.price?.net || 0;
+
+                    if (customData?.locationId) {
+                        try {
+                            await client.post('/inventory_levels/set.json', {
+                                location_id: customData.locationId,
+                                inventory_item_id: createdVariant.inventory_item_id,
+                                available: stockData,
+                            });
+                        } catch (invError: any) {
+                            console.error(`Error setting inventory for ${createdVariant.sku}:`, invError?.response?.data || invError);
+                        }
+                    }
+
+                    if (costData > 0) {
+                        await setCostPerItem(createdVariant.inventory_item_id, costData);
+                    }
+
+                    createdVariants.push(createdVariant);
+
+                } catch (err: any) {
+                    console.error(`Error creating variant ${newVariant.sku}:`, err?.response?.data || err);
+                }
+            }
+        }
+
+        return { ...existingProduct, variants: createdVariants }; // Return merged object
     }
 
     const product: any = {
-        title: customData?.title || firstProduct.description,
+        title: productTitle,
         body_html: descriptionHtml,
         vendor: customData?.vendor || firstProduct.brand || firstProduct.supplier,
         product_type: customData?.type || 'Part',

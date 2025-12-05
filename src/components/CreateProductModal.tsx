@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { ProductDetails } from '@/lib/types';
 import axios from 'axios';
 import { X, Package, Tag, DollarSign, Layers, FileText, Box, MapPin, Upload, CheckCircle, AlertCircle, Settings, Image as ImageIcon } from 'lucide-react';
+import { VariantParser } from '@/lib/variant-parser';
 
 interface VariantData {
     sku: string;
@@ -35,7 +36,7 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
     const [formData, setFormData] = useState({
         title: product.description,
         description: '',
-        image: product.image || '',
+        images: [product.image].filter(Boolean) as string[],
         type: 'Part',
         vendor: product.brand || product.supplier,
         tags: '',
@@ -50,27 +51,58 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
 
     // Initialize variants data
     useEffect(() => {
-        const initialVariants = allProducts.map(p => ({
-            sku: p.sku,
-            optionValue: p.sku,
-            price: p.price.retail,
-            compareAtPrice: p.price.retail,
-            cost: p.price.net || 0,
-            margin: p.price.retail && p.price.net
-                ? parseFloat((((p.price.retail - p.price.net) / p.price.retail) * 100).toFixed(2))
-                : 0,
-            upc: p.upc || '',
-            weight: p.weight?.value || 0,
-            weightUnit: p.weight?.unit || 'lb',
-            stock: p.stock.reduce((sum, s) => sum + s.quantity, 0),
-            image: p.image || '', // Initialize with product image
+        // Smart detection for option names and values
+        const descriptions = allProducts.map(p => p.description);
+        const { optionName, commonBaseName, variants: parsedVariants } = VariantParser.detectCommonPattern(descriptions);
+
+        setFormData(prev => ({
+            ...prev,
+            optionName,
+            title: isMultiVariant ? commonBaseName : prev.title // Use smart title if multi-variant
         }));
+
+        const initialVariants = allProducts.map((p, idx) => {
+            const parsed = parsedVariants[idx];
+            return {
+                sku: p.sku,
+                optionValue: parsed ? parsed.optionValue : p.sku,
+                price: p.price.retail,
+                compareAtPrice: p.price.retail,
+                cost: p.price.net || 0,
+                margin: p.price.retail && p.price.net
+                    ? parseFloat((((p.price.retail - p.price.net) / p.price.retail) * 100).toFixed(2))
+                    : 0,
+                upc: p.upc || '',
+                weight: p.weight?.value || 0,
+                weightUnit: p.weight?.unit || 'lb',
+                stock: p.stock.reduce((sum, s) => sum + s.quantity, 0),
+                image: p.image || '', // Initialize with product image
+            };
+        });
         setVariantsData(initialVariants);
     }, []);
 
     const handleChange = useCallback((field: string, value: any) => {
         setFormData(prev => ({ ...prev, [field]: value }));
     }, []);
+
+    const handleBulkMarginChange = (value: string) => {
+        const newMargin = parseFloat(value);
+        if (isNaN(newMargin)) return;
+
+        setVariantsData(prev => prev.map(variant => {
+            let newPrice = variant.price;
+            if (newMargin < 100) {
+                newPrice = parseFloat((variant.cost / (1 - newMargin / 100)).toFixed(2));
+            }
+            return {
+                ...variant,
+                margin: newMargin,
+                price: newPrice,
+                compareAtPrice: newPrice
+            };
+        }));
+    };
 
     const handleVariantChange = useCallback((index: number, field: string, value: any) => {
         setVariantsData(prev => {
@@ -142,6 +174,28 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
         e.preventDefault();
         setLoading(true);
         try {
+            // 1. Check if product already exists
+            const skusToCheck = isMultiVariant
+                ? variantsData.map(v => v.sku).filter(Boolean)
+                : [variantsData[0]?.sku || product.sku].filter(Boolean);
+
+            if (skusToCheck.length > 0) {
+                const checkResponse = await axios.post('/api/check-product', { skus: skusToCheck });
+                if (checkResponse.data.exists) {
+                    const existingProducts = checkResponse.data.products;
+                    const existingTitles = existingProducts.map((p: any) => p.title).join(', ');
+                    const confirmCreate = window.confirm(
+                        `Warning: Products with these SKUs already exist on Shopify:\n${existingTitles}\n\nDo you still want to create this product?`
+                    );
+
+                    if (!confirmCreate) {
+                        setLoading(false);
+                        return;
+                    }
+                }
+            }
+
+            // 2. Create product
             await axios.post('/api/create-product', {
                 productDetails: allProducts,
                 customData: {
@@ -221,7 +275,19 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
                                                 <th className="pb-2 pr-4 font-medium">{formData.optionName || 'Option'}</th>
                                                 <th className="pb-2 pr-4 font-medium">SKU</th>
                                                 <th className="pb-2 pr-4 font-medium">Cost</th>
-                                                <th className="pb-2 pr-4 font-medium">Margin %</th>
+                                                <th className="pb-2 pr-4 font-medium">
+                                                    <div className="flex flex-col gap-1">
+                                                        <span>Margin %</span>
+                                                        <input
+                                                            type="number"
+                                                            step="0.1"
+                                                            placeholder="Set all"
+                                                            className="text-xs border rounded px-1 py-0.5 font-normal w-16"
+                                                            onChange={(e) => handleBulkMarginChange(e.target.value)}
+                                                            onClick={(e) => e.stopPropagation()}
+                                                        />
+                                                    </div>
+                                                </th>
                                                 <th className="pb-2 pr-4 font-medium">Price</th>
                                                 <th className="pb-2 font-medium">Stock</th>
                                             </tr>
@@ -378,66 +444,107 @@ export default function CreateProductModal({ isOpen, onClose, product, variants 
 
                                         {/* Image Upload Section */}
                                         <div>
-                                            <label className="label-premium">Primary Image {isMultiVariant && '(Used for variants without images)'}</label>
-                                            <div
-                                                className={`relative border-2 border-dashed rounded-xl p-6 transition-all text-center ${dragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300 bg-gray-50'
-                                                    }`}
-                                                onDragEnter={handleDrag}
-                                                onDragLeave={handleDrag}
-                                                onDragOver={handleDrag}
-                                                onDrop={handleDrop}
-                                            >
-                                                <input
-                                                    type="file"
-                                                    id="image-upload"
-                                                    className="hidden"
-                                                    accept="image/*"
-                                                    onChange={handleFileChange}
-                                                />
+                                            <label className="label-premium">Product Images {isMultiVariant && '(First image used for variants without images)'}</label>
 
-                                                {formData.image ? (
-                                                    <div className="relative group">
-                                                        <img
-                                                            src={formData.image}
-                                                            alt="Preview"
-                                                            className="h-48 mx-auto object-contain rounded-lg shadow-sm bg-white"
-                                                        />
-                                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-lg">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleChange('image', '')}
-                                                                className="bg-white text-red-600 px-4 py-2 rounded-lg font-medium shadow-lg hover:bg-red-50"
-                                                            >
-                                                                Remove Image
-                                                            </button>
+                                            {/* Image Grid */}
+                                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
+                                                {formData.images.map((img, idx) => {
+                                                    if (!img) return null;
+                                                    return (
+                                                        <div key={idx} className="relative group aspect-square border-2 border-transparent hover:border-blue-500 rounded-xl overflow-hidden shadow-sm bg-white">
+                                                            <img
+                                                                src={img}
+                                                                alt={`Product ${idx + 1}`}
+                                                                className="w-full h-full object-contain"
+                                                            />
+                                                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        const newImages = [...formData.images];
+                                                                        newImages.splice(idx, 1);
+                                                                        handleChange('images', newImages);
+                                                                    }}
+                                                                    className="bg-white text-red-600 p-2 rounded-lg shadow-lg hover:bg-red-50"
+                                                                    title="Remove"
+                                                                >
+                                                                    <X size={16} />
+                                                                </button>
+                                                            </div>
+                                                            {idx === 0 && (
+                                                                <div className="absolute top-2 left-2 bg-blue-600 text-white text-xs px-2 py-1 rounded shadow-md">
+                                                                    Primary
+                                                                </div>
+                                                            )}
                                                         </div>
-                                                    </div>
-                                                ) : (
-                                                    <div className="py-8">
-                                                        <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                                                            <Upload size={32} />
-                                                        </div>
-                                                        <p className="text-gray-900 font-medium mb-1">
-                                                            Drag & drop an image here, or <label htmlFor="image-upload" className="text-blue-600 hover:underline cursor-pointer">browse</label>
-                                                        </p>
-                                                        <p className="text-sm text-gray-500">Supports JPG, PNG, WEBP</p>
+                                                    );
+                                                })}
 
-                                                        <div className="mt-4 flex items-center gap-3">
-                                                            <div className="h-px bg-gray-200 flex-1" />
-                                                            <span className="text-xs text-gray-400 font-medium uppercase">OR</span>
-                                                            <div className="h-px bg-gray-200 flex-1" />
-                                                        </div>
-
-                                                        <input
-                                                            type="text"
-                                                            placeholder="Paste image URL here"
-                                                            value={formData.image}
-                                                            onChange={(e) => handleChange('image', e.target.value)}
-                                                            className="mt-4 input-premium text-sm"
-                                                        />
-                                                    </div>
-                                                )}
+                                                {/* Add Image Button */}
+                                                <div className="relative border-2 border-dashed border-gray-200 hover:border-blue-500 hover:bg-blue-50 rounded-xl transition-all aspect-square flex flex-col items-center justify-center cursor-pointer text-gray-400 hover:text-blue-600 group">
+                                                    <input
+                                                        type="file"
+                                                        multiple
+                                                        className="absolute inset-0 opacity-0 cursor-pointer"
+                                                        accept="image/*"
+                                                        onChange={(e) => {
+                                                            if (e.target.files) {
+                                                                const files = Array.from(e.target.files);
+                                                                files.forEach(file => {
+                                                                    const reader = new FileReader();
+                                                                    reader.onloadend = () => {
+                                                                        setFormData(prev => ({
+                                                                            ...prev,
+                                                                            images: [...prev.images, reader.result as string]
+                                                                        }));
+                                                                    };
+                                                                    reader.readAsDataURL(file);
+                                                                });
+                                                            }
+                                                        }}
+                                                    />
+                                                    <Upload size={32} className="mb-2 group-hover:scale-110 transition-transform" />
+                                                    <span className="text-sm font-medium">Add Images</span>
+                                                </div>
                                             </div>
+
+                                            <div className="flex gap-2">
+                                                <input
+                                                    type="text"
+                                                    placeholder="Paste image URL here..."
+                                                    className="input-premium text-sm flex-1"
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') {
+                                                            e.preventDefault();
+                                                            const url = e.currentTarget.value;
+                                                            if (url) {
+                                                                setFormData(prev => ({
+                                                                    ...prev,
+                                                                    images: [...prev.images, url]
+                                                                }));
+                                                                e.currentTarget.value = '';
+                                                            }
+                                                        }
+                                                    }}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg font-medium hover:bg-gray-200 transition-colors"
+                                                    onClick={(e: any) => {
+                                                        const input = e.currentTarget.previousElementSibling as HTMLInputElement;
+                                                        if (input.value) {
+                                                            setFormData(prev => ({
+                                                                ...prev,
+                                                                images: [...prev.images, input.value]
+                                                            }));
+                                                            input.value = '';
+                                                        }
+                                                    }}
+                                                >
+                                                    Add
+                                                </button>
+                                            </div>
+                                            <p className="text-xs text-gray-400 mt-2">Drag & drop or paste URL and press Enter.</p>
                                         </div>
                                     </div>
                                 </section>

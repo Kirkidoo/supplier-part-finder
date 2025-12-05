@@ -40,7 +40,11 @@ export async function searchThibaultPart(sku: string): Promise<ProductDetails | 
                 const items = result.value.data.items;
                 return Array.isArray(items) ? items[0] : items;
             } else {
-                console.error(`Error fetching ${name}:`, result.reason?.message || result.reason);
+                // Ignore 400/404 errors which likely mean "not found" or "invalid SKU"
+                const status = result.reason?.response?.status;
+                if (status !== 404 && status !== 400) {
+                    console.error(`Error fetching ${name}:`, result.reason?.message || result.reason);
+                }
                 return null;
             }
         };
